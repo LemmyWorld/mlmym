@@ -4,7 +4,6 @@ WORKDIR /app
 COPY go.* ./
 RUN go mod download
 COPY . ./
-RUN git describe --tag > VERSION
 RUN go build -v -o mlmym
 
 FROM debian:bullseye-slim
@@ -15,5 +14,4 @@ RUN set -x && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -
 COPY --from=builder /app/mlmym /app/mlmym
 COPY --from=builder /app/templates /app/templates
 COPY --from=builder /app/public /app/public
-COPY --from=builder /app/VERSION /app/VERSION
 CMD ["./mlmym", "--addr", "0.0.0.0:8080"]
