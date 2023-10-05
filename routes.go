@@ -141,7 +141,7 @@ var funcMap = template.FuncMap{
 		}
 		body = buf.String()
 		body = strings.Replace(body, `<img `, `<img loading="lazy" `, -1)
-		body = LemmyLinkRewrite(body, host, os.Getenv("LEMMY_DOMAIN"))
+		body = RegReplace(body, `href="(https:\/\/[a-zA-Z0-9\.\-]+\/(c|u|comment|post)\/[^#\?]*?)"`, `href="/`+host+`/link?url=$1"`)
 		body = RegReplace(body, `::: ?spoiler (.*?)\n([\S\s]*?):::`, "<details><summary>$1</summary>$2</details>")
 		return template.HTML(body)
 	},
@@ -282,6 +282,11 @@ func Initialize(Host string, r *http.Request) (State, error) {
 	if state.Listing == "" || state.Session == nil && state.Listing == "Subscribed" {
 		state.Listing = getenv("LISTING", "All")
 	}
+	if linksInNewWindow := getCookie(r, "LinksInNewWindow"); linksInNewWindow != "" {
+		state.LinksInNewWindow = linksInNewWindow != "0"
+	} else {
+		state.LinksInNewWindow = os.Getenv("LINKS_IN_NEW_WINDOW") != ""
+	}
 	return state, nil
 }
 func GetTemplate(name string) (*template.Template, error) {
@@ -295,7 +300,7 @@ func GetTemplate(name string) (*template.Template, error) {
 	}
 	t, ok := templates[name]
 	if !ok {
-		return nil, errors.New("template not found")
+		return nil, errors.New("template not found: " + name)
 	}
 	return t, nil
 }
@@ -327,6 +332,11 @@ func Render(w http.ResponseWriter, templateName string, state State) {
 func GetRoot(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	data := make(map[string]any)
 	data["Title"] = r.Host
+	if dark := getCookie(r, "Dark"); dark != "" {
+		data["Dark"] = dark != "0"
+	} else {
+		data["Dark"] = os.Getenv("DARK") != ""
+	}
 	tmpl, err := GetTemplate("root.html")
 	if err != nil {
 		fmt.Println("execute fail", err)
@@ -493,6 +503,7 @@ func GetPost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		Render(w, "index.html", state)
 		return
 	}
+	// redirect /post/remote_id@instance to /post/local_id
 	if path := strings.Split(ps.ByName("postid"), "@"); len(path) > 1 {
 		apid := ResolveId(r, "post", path[0], path[1])
 		if apid != "" {
@@ -529,6 +540,11 @@ func GetPost(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	}
 	postid, _ := strconv.Atoi(ps.ByName("postid"))
 	state.GetPost(postid)
+	if ps.ByName("op") == "block" {
+		state.Op = "block"
+		Render(w, "block.html", state)
+		return
+	}
 	state.GetComments()
 	Render(w, "index.html", state)
 }
@@ -597,6 +613,9 @@ func GetUser(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		return
 	}
 	state.GetUser(ps.ByName("username"))
+	if state.Site == nil {
+		state.GetSite()
+	}
 	Render(w, "index.html", state)
 }
 func GetMessageForm(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -633,6 +652,17 @@ func GetCreatePost(w http.ResponseWriter, r *http.Request, ps httprouter.Params)
 	if err != nil {
 		Render(w, "index.html", state)
 		return
+	}
+	m, _ := url.ParseQuery(r.URL.RawQuery)
+
+	if len(m["url"]) > 0 {
+		state.SubmitURL = m["url"][0]
+	}
+	if len(m["title"]) > 0 {
+		state.SubmitTitle = m["title"][0]
+	}
+	if len(m["body"]) > 0 {
+		state.SubmitBody = m["body"][0]
 	}
 	state.GetSite()
 	state.GetCommunity("")
@@ -739,6 +769,13 @@ func Settings(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		} else {
 			setCookie(w, "", "HideThumbnails", "0")
 			state.HideInstanceNames = false
+		}
+		if r.FormValue("linksInNewWindow") != "" {
+			setCookie(w, "", "LinksInNewWindow", "1")
+			state.LinksInNewWindow = true
+		} else {
+			setCookie(w, "", "LinksInNewWindow", "0")
+			state.LinksInNewWindow = false
 		}
 		state.Listing = r.FormValue("DefaultListingType")
 		state.Sort = r.FormValue("DefaultSortType")
@@ -931,6 +968,20 @@ func UserOp(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 			CommunityID: communityid,
 			Block:       false,
 		})
+	case "block_user":
+		personId, _ := strconv.Atoi(r.FormValue("user_id"))
+		if personId == 0 {
+			state.GetUser(ps.ByName("username"))
+			personId = state.User.PersonView.Person.ID
+		}
+		state.Client.BlockPerson(context.Background(), types.BlockPerson{
+			PersonID: personId,
+			Block:    r.FormValue("submit") == "block",
+		})
+		if r.FormValue("xhr") == "1" {
+			w.Write([]byte{})
+			return
+		}
 	case "logout":
 		deleteCookie(w, state.Host, "jwt")
 		deleteCookie(w, state.Host, "user")
@@ -1166,6 +1217,21 @@ func UserOp(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 			r.URL.Path = "/" + state.Host + "/c/" + resp.PostView.Community.Name
 			r.URL.RawQuery = ""
 		}
+	case "block_post":
+		postid, _ := strconv.Atoi(r.FormValue("postid"))
+		state.GetPost(postid)
+		if r.FormValue("blockcommunity") != "" && len(state.Posts) > 0 {
+			state.Client.BlockCommunity(context.Background(), types.BlockCommunity{
+				CommunityID: state.Posts[0].Post.CommunityID,
+				Block:       true,
+			})
+		}
+		if r.FormValue("blockuser") != "" && len(state.Posts) > 0 {
+			state.Client.BlockPerson(context.Background(), types.BlockPerson{
+				PersonID: state.Posts[0].Post.CreatorID,
+				Block:    true,
+			})
+		}
 	case "read_post":
 		postid, _ := strconv.Atoi(r.FormValue("postid"))
 		post := types.MarkPostAsRead{
@@ -1231,7 +1297,7 @@ func UserOp(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 			postid, _ := strconv.Atoi(ps.ByName("postid"))
 			state.PostID = postid
 		}
-		if r.FormValue("parentid") != "" {
+		if r.FormValue("parentid") != "" && r.FormValue("parentid") != "0" {
 			parentid, _ := strconv.Atoi(r.FormValue("parentid"))
 			state.GetComment(parentid)
 		}
@@ -1362,6 +1428,13 @@ func UserOp(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		if err != nil {
 			fmt.Println(err)
 		} else {
+			if r.FormValue("xhr") != "" {
+				state.XHR = true
+				state.Comments = append(state.Comments, Comment{P: resp.CommentView, State: &state})
+				state.CommentID = commentid
+				Render(w, "index.html", state)
+				return
+			}
 			commentid := strconv.Itoa(resp.CommentView.Comment.ID)
 			r.URL.Fragment = "c" + commentid
 			r.URL.RawQuery = ""
@@ -1374,6 +1447,33 @@ func UserOp(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		}
 	}
 	http.Redirect(w, r, r.URL.String(), 301)
+}
+func GetLink(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	var dest *url.URL
+	m, _ := url.ParseQuery(r.URL.RawQuery)
+	if len(m["url"]) > 0 {
+		dest, _ = url.Parse(m["url"][0])
+	}
+	if dest.Host == r.Host || !IsLemmy(dest.Host, RemoteAddr(r)) {
+		http.Redirect(w, r, dest.String(), 302)
+		return
+	}
+	if host := ps.ByName("host"); host != "" {
+		redirect := "/" + host + dest.Path
+		if host != dest.Host && !strings.Contains(redirect, "@") {
+			redirect += ("@" + dest.Host)
+		}
+		http.Redirect(w, r, redirect, 302)
+		return
+	}
+	if host := os.Getenv("LEMMY_DOMAIN"); host != "" {
+		redirect := dest.Path
+		if host != dest.Host && !strings.Contains(redirect, "@") {
+			redirect += ("@" + dest.Host)
+		}
+		http.Redirect(w, r, redirect, 302)
+		return
+	}
 }
 func GetRouter() *httprouter.Router {
 	host := os.Getenv("LEMMY_DOMAIN")
@@ -1399,6 +1499,7 @@ func GetRouter() *httprouter.Router {
 		router.GET("/:host/c/:community/edit", middleware(GetCreateCommunity))
 		router.GET("/:host/post/:postid", middleware(GetPost))
 		router.POST("/:host/post/:postid", middleware(UserOp))
+		router.GET("/:host/post/:postid/:op", middleware(GetPost))
 		router.GET("/:host/comment/:commentid", middleware(GetComment))
 		router.GET("/:host/comment/:commentid/:op", middleware(GetComment))
 		router.POST("/:host/comment/:commentid", middleware(UserOp))
@@ -1412,6 +1513,7 @@ func GetRouter() *httprouter.Router {
 		router.GET("/:host/create_community", middleware(GetCreateCommunity))
 		router.POST("/:host/create_community", middleware(UserOp))
 		router.GET("/:host/communities", middleware(GetCommunities))
+		router.GET("/:host/link", middleware(GetLink))
 	} else {
 		router.ServeFiles("/_/static/*filepath", http.Dir("public"))
 		router.GET("/", middleware(GetFrontpage))
@@ -1444,6 +1546,7 @@ func GetRouter() *httprouter.Router {
 		router.GET("/create_community", middleware(GetCreateCommunity))
 		router.POST("/create_community", middleware(UserOp))
 		router.GET("/communities", middleware(GetCommunities))
+		router.GET("/link", middleware(GetLink))
 	}
 	return router
 }

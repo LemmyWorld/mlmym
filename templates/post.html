@@ -25,14 +25,20 @@
         </div>
         {{ if not .State.HideThumbnails }}
         <div class="thumb">
-          <a class="url" href="{{ if .Post.URL.IsValid }}{{ .Post.URL }}{{ else }}/{{ .State.Host }}/post/{{ .Post.ID }}{{ end }}">
+          <a class="url"
+             href="{{ if .Post.URL.IsValid }}{{ .Post.URL }}{{ else }}/{{ .State.Host }}/post/{{ .Post.ID }}{{ end }}"
+             {{ if .State.LinksInNewWindow }} target="_blank" {{ end }}>
             <div {{ if and .Post.NSFW (not (and .State.Community .State.Community.CommunityView.Community.NSFW))}}class="img-blur"{{end}} style="background-image: url({{thumbnail .Post}})"></div>
           </a>
         </div>
         {{ end }}
         <div class="entry">
           <div class="title">
-            <a class="url" href="{{ if .Post.URL.IsValid }}{{ .Post.URL }}{{ else }}/{{ .State.Host }}/post/{{ .Post.ID }}{{ end }}">{{ rmmarkdown .Post.Name }}</a>
+            <a class="url"
+               href="{{ if .Post.URL.IsValid }}{{ .Post.URL }}{{ else }}/{{ .State.Host }}/post/{{ .Post.ID }}{{ end }}"
+                {{ if .State.LinksInNewWindow }} target="_blank" {{ end }}>
+                {{ rmmarkdown .Post.Name }}
+            </a>
             ({{ domain . }})
           </div>
           <div class="expando-button{{ if and (not (and .Post.Body.IsValid .Post.Body.String )) (not (isImage .Post.URL.String)) }} hidden{{else if eq .Rank 0}} open{{ end }}"></div>
@@ -51,7 +57,7 @@
               {{- end -}}
             </a>
             to
-            <a href="/{{ .State.Host }}/c/{{ fullcname .Community }}">
+            <a class="community" href="/{{ .State.Host }}/c/{{ fullcname .Community }}">
               c/{{ if .State.HideInstanceNames -}}
               {{ .Community.Name }}
               {{ else -}}
@@ -63,6 +69,10 @@
             {{ if .Post.NSFW }}<span class="nsfw">NSFW</span>{{end}}
             <a href="/{{ .State.Host }}/post/{{ .Post.ID }}">{{ .Counts.Comments }} comments</a>
             <a href="{{ .Post.ApID}}">fedilink</a>
+            {{ if .State.Session }}
+            <a href="/{{ .State.Host }}/post/{{ .Post.ID }}/block" rel="xhr" target="block{{ .Post.ID }}">block</a>
+            {{ end }}
+            <span class="blockpopup" name="block{{.Post.ID}}"></span>
           {{ if and .State.Session (eq .State.Session.UserID .Post.CreatorID) }}
             {{ if not .Post.Deleted }}<a href="/{{ .State.Host }}/post/{{ .Post.ID }}?edit">edit</a>{{end}}
             <form class="link-btn" method="POST">

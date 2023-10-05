@@ -105,6 +105,22 @@ type State struct {
 	ShowNSFW          bool
 	HideInstanceNames bool
 	HideThumbnails    bool
+	LinksInNewWindow  bool
+	SubmitURL         string
+	SubmitTitle       string
+	SubmitBody        string
+}
+
+func (s State) UserBlocked() bool {
+	if s.User == nil || s.Site == nil || !s.Site.MyUser.IsValid() {
+		return false
+	}
+	for _, p := range s.Site.MyUser.MustValue().PersonBlocks {
+		if p.Target.ID == s.User.PersonView.Person.ID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s State) Unknown() string {
@@ -154,10 +170,7 @@ func (p State) ListBy(v string) string {
 }
 
 func (p State) PrevPage() string {
-	var listing string
-	if p.Listing != "All" {
-		listing = "&listingType=" + p.Listing
-	}
+	listing := "&listingType=" + p.Listing
 	var q string
 	if p.Query != "" || p.SearchType == "Communities" {
 		q = "q=" + p.Query + "&communityname=" + p.CommunityName + "&username=" + p.UserName + "&searchtype=" + p.SearchType + "&"
@@ -166,10 +179,7 @@ func (p State) PrevPage() string {
 	return "?" + q + "sort=" + p.Sort + listing + "&page=" + page
 }
 func (p State) NextPage() string {
-	var listing string
-	if p.Listing != "All" {
-		listing = "&listingType=" + p.Listing
-	}
+	listing := "&listingType=" + p.Listing
 	var q string
 	if p.Query != "" || p.SearchType == "Communities" {
 		q = "q=" + p.Query + "&communityname=" + p.CommunityName + "&username=" + p.UserName + "&searchtype=" + p.SearchType + "&"
