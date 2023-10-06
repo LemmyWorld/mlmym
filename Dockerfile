@@ -5,6 +5,7 @@ COPY go.* ./
 RUN go mod download
 COPY . ./
 RUN go build -v -o mlmym
+RUN go build -v -o health-check ./healthcheck
 
 FROM debian:bullseye-slim
 WORKDIR /app
@@ -14,4 +15,6 @@ RUN set -x && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -
 COPY --from=builder /app/mlmym /app/mlmym
 COPY --from=builder /app/templates /app/templates
 COPY --from=builder /app/public /app/public
+COPY --from=builder /app/health-check /app/health-check
 CMD ["./mlmym", "--addr", "0.0.0.0:8080"]
+HEALTHCHECK CMD /app/health-check
